@@ -1,13 +1,13 @@
 #include <Arduino.h>
 #include <WiFi.h>
-#include <ArduinoWebsockets.h>
+#include <WebSocketsClient.h>
 
 namespace {
-using namespace websockets;
-
-constexpr char WIFI_SSID[] = "YOUR_HOME_WIFI";
-constexpr char WIFI_PASSWORD[] = "YOUR_WIFI_PASSWORD";
-constexpr char WS_URL[] = "wss://your-railway-app.up.railway.app/ws";
+constexpr char WIFI_SSID[] = "TNMG";
+constexpr char WIFI_PASSWORD[] = "ForEver0902";
+constexpr char WS_HOST[] = "linefollowingrobot.up.railway.app";
+constexpr uint16_t WS_PORT = 443;
+constexpr char WS_PATH[] = "/ws";
 constexpr int LED_PIN = 2;
 constexpr unsigned long HEARTBEAT_INTERVAL_MS = 1000;
 constexpr unsigned long RECONNECT_INTERVAL_MS = 2000;
@@ -15,8 +15,7 @@ constexpr unsigned long RECONNECT_INTERVAL_MS = 2000;
 String desiredState = "off";
 bool ledIsOn = false;
 unsigned long lastHeartbeatAt = 0;
-unsigned long lastReconnectAttemptAt = 0;
-WebsocketsClient websocket;
+WebSocketsClient webSocket;
 bool websocketReady = false;
 
 bool extractState(const String& payload, const char* key, String& result) {
@@ -60,22 +59,24 @@ void connectToWifi() {
 }
 
 void sendHello() {
-  websocket.send("{\"type\":\"hello\",\"role\":\"device\"}");
+  webSocket.sendTXT("{\"type\":\"hello\",\"role\":\"device\"}");
 }
 
 void sendHeartbeat() {
-  if (!websocket.available()) {
+  if (!webSocket.isConnected()) {
     return;
   }
 
   String payload = "{\"type\":\"device-state\",\"state\":\"";
   payload += ledIsOn ? "on" : "off";
   payload += "\"}";
-  websocket.send(payload);
+  webSocket.sendTXT(payload);
 }
 
-void handleMessage(WebsocketsMessage message) {
-  const String payload = message.data();
+void handleMessage(const String& payload) {
+  Serial.print("WS message: ");
+  Serial.println(payload);
+
   String nextState;
 
   if (extractState(payload, "desiredState", nextState) && nextState != desiredState) {
@@ -86,17 +87,27 @@ void handleMessage(WebsocketsMessage message) {
   }
 }
 
-void handleEvent(WebsocketsEvent event, String) {
-  if (event == WebsocketsEvent::ConnectionOpened) {
-    websocketReady = true;
-    Serial.println("WebSocket connected");
-    sendHello();
-    sendHeartbeat();
-  }
-
-  if (event == WebsocketsEvent::ConnectionClosed) {
-    websocketReady = false;
-    Serial.println("WebSocket disconnected");
+void handleEvent(WStype_t type, uint8_t* payload, size_t length) {
+  switch (type) {
+    case WStype_CONNECTED:
+      websocketReady = true;
+      Serial.println("WebSocket connected");
+      sendHello();
+      sendHeartbeat();
+      break;
+    case WStype_DISCONNECTED:
+      websocketReady = false;
+      Serial.println("WebSocket disconnected");
+      break;
+    case WStype_TEXT:
+      handleMessage(String(reinterpret_cast<char*>(payload), length));
+      break;
+    case WStype_ERROR:
+      websocketReady = false;
+      Serial.println("WebSocket error");
+      break;
+    default:
+      break;
   }
 }
 
@@ -106,15 +117,9 @@ void connectWebSocket() {
   }
 
   Serial.println("Connecting to Railway WebSocket");
-  websocket.onMessage(handleMessage);
-  websocket.onEvent(handleEvent);
-  websocket.setInsecure();
-  websocket.setReconnectInterval(RECONNECT_INTERVAL_MS);
-
-  if (!websocket.connect(WS_URL)) {
-    Serial.println("WebSocket connect failed");
-    websocketReady = false;
-  }
+  webSocket.beginSSL(WS_HOST, WS_PORT, WS_PATH);
+  webSocket.setReconnectInterval(RECONNECT_INTERVAL_MS);
+  webSocket.onEvent(handleEvent);
 }
 }  // namespace
 
@@ -134,22 +139,12 @@ void loop() {
     connectToWifi();
   }
 
-  if (!websocket.available()) {
-    const unsigned long now = millis();
-
-    if (now - lastReconnectAttemptAt >= RECONNECT_INTERVAL_MS) {
-      lastReconnectAttemptAt = now;
-      connectWebSocket();
-    }
-
-    delay(10);
-    return;
-  }
-
-  websocket.poll();
+  webSocket.loop();
 
   if (websocketReady && millis() - lastHeartbeatAt >= HEARTBEAT_INTERVAL_MS) {
     lastHeartbeatAt = millis();
     sendHeartbeat();
   }
+
+  delay(10);
 }
