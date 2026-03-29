@@ -16,6 +16,13 @@ const state = {
   lastCommandAt: null,
   lastReportedState: 'unknown',
   lastSeenAt: null,
+  driveCommand: {
+    x: 0,
+    y: 0,
+    left: 0,
+    right: 0,
+    mode: 'stop',
+  },
 }
 
 const uiClients = new Set()
@@ -85,6 +92,12 @@ function unregisterClient(socket) {
 
 function relayLedCommand(nextState) {
   state.desiredState = nextState
+  state.lastCommandAt = new Date().toISOString()
+  broadcastSnapshot()
+}
+
+function relayDriveCommand(command) {
+  state.driveCommand = command
   state.lastCommandAt = new Date().toISOString()
   broadcastSnapshot()
 }
@@ -212,6 +225,25 @@ websocketServer.on('connection', (socket) => {
 
         relayLedCommand(payload.state)
         socket.send(JSON.stringify({ type: 'ack', state: payload.state }))
+        return
+      }
+
+      if (payload.type === 'drive') {
+        if (socket.role !== 'ui') {
+          socket.send(JSON.stringify({ type: 'error', message: 'ui only action' }))
+          return
+        }
+
+        const command = {
+          x: Number(payload.x ?? 0),
+          y: Number(payload.y ?? 0),
+          left: Number(payload.left ?? 0),
+          right: Number(payload.right ?? 0),
+          mode: String(payload.mode ?? 'stop'),
+        }
+
+        relayDriveCommand(command)
+        socket.send(JSON.stringify({ type: 'ack', command }))
         return
       }
 
