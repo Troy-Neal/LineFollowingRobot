@@ -1,7 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import './App.css'
-
-const POLL_INTERVAL_MS = 500
 
 function formatTimestamp(value) {
   if (!value) {
@@ -16,64 +14,89 @@ function App() {
   const [reportedState, setReportedState] = useState('unknown')
   const [lastSeenAt, setLastSeenAt] = useState(null)
   const [lastCommandAt, setLastCommandAt] = useState(null)
-  const [loading, setLoading] = useState(true)
+  const [deviceCount, setDeviceCount] = useState(0)
   const [mutating, setMutating] = useState(false)
   const [error, setError] = useState('')
+  const [connected, setConnected] = useState(false)
+  const socketRef = useRef(null)
 
-  async function fetchStatus() {
-    try {
-      const response = await fetch('/api/led')
-
-      if (!response.ok) {
-        throw new Error(`Status request failed with ${response.status}`)
-      }
-
-      const payload = await response.json()
-      setDesiredState(payload.desiredState ?? 'off')
-      setReportedState(payload.lastReportedState ?? 'unknown')
-      setLastSeenAt(payload.lastSeenAt ?? null)
-      setLastCommandAt(payload.lastCommandAt ?? null)
-      setError('')
-    } catch (requestError) {
-      setError(requestError.message)
-    } finally {
-      setLoading(false)
-    }
+  function applySnapshot(payload) {
+    setDesiredState(payload.desiredState ?? 'off')
+    setReportedState(payload.lastReportedState ?? 'unknown')
+    setLastSeenAt(payload.lastSeenAt ?? null)
+    setLastCommandAt(payload.lastCommandAt ?? null)
+    setDeviceCount(payload.deviceCount ?? 0)
   }
 
   useEffect(() => {
-    fetchStatus()
+    let reconnectTimerId = 0
+    let stopped = false
 
-    const intervalId = window.setInterval(fetchStatus, POLL_INTERVAL_MS)
+    function connect() {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      const socket = new WebSocket(`${protocol}//${window.location.host}/ws`)
+      socketRef.current = socket
 
-    return () => window.clearInterval(intervalId)
-  }, [])
-
-  async function updateState(nextState) {
-    setMutating(true)
-
-    try {
-      const response = await fetch('/api/led', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ state: nextState }),
+      socket.addEventListener('open', () => {
+        setConnected(true)
+        setError('')
+        socket.send(JSON.stringify({ type: 'hello', role: 'ui' }))
       })
 
-      if (!response.ok) {
-        throw new Error(`Update failed with ${response.status}`)
-      }
+      socket.addEventListener('message', (event) => {
+        try {
+          const payload = JSON.parse(event.data)
 
-      const payload = await response.json()
-      setDesiredState(payload.desiredState ?? nextState)
-      setLastCommandAt(payload.lastCommandAt ?? new Date().toISOString())
-      setError('')
-    } catch (requestError) {
-      setError(requestError.message)
-    } finally {
-      setMutating(false)
+          if (payload.type === 'snapshot') {
+            applySnapshot(payload)
+            setMutating(false)
+          }
+
+          if (payload.type === 'ack') {
+            setMutating(false)
+          }
+
+          if (payload.type === 'error') {
+            setError(payload.message ?? 'WebSocket error')
+            setMutating(false)
+          }
+        } catch (parseError) {
+          setError(parseError.message)
+        }
+      })
+
+      socket.addEventListener('close', () => {
+        setConnected(false)
+        socketRef.current = null
+
+        if (!stopped) {
+          reconnectTimerId = window.setTimeout(connect, 1000)
+        }
+      })
+
+      socket.addEventListener('error', () => {
+        setError('Realtime connection failed')
+      })
     }
+
+    connect()
+
+    return () => {
+      stopped = true
+      window.clearTimeout(reconnectTimerId)
+      socketRef.current?.close()
+    }
+  }, [])
+
+  function updateState(nextState) {
+    if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
+      setError('WebSocket is not connected')
+      return
+    }
+
+    setMutating(true)
+    setDesiredState(nextState)
+    socketRef.current.send(JSON.stringify({ type: 'set-led', state: nextState }))
   }
 
   return (
@@ -82,8 +105,8 @@ function App() {
         <p className="eyebrow">Railway Control Surface</p>
         <h1>ESP32 LED Command Center</h1>
         <p className="lede">
-          This site stores the latest LED command in Railway. Your ESP32 reads it
-          over home Wi-Fi and applies the change on its next poll.
+          Railway keeps a live WebSocket open to both the browser and the ESP32,
+          so LED commands are forwarded immediately instead of waiting for a poll.
         </p>
 
         <div className="actions">
@@ -106,8 +129,7 @@ function App() {
         </div>
 
         <p className="hint">
-          The ESP32 does not need a browser open. It only needs internet access
-          to your Railway app.
+          The ESP32 only needs outbound internet access to your Railway app.
         </p>
       </section>
 
@@ -127,10 +149,10 @@ function App() {
         <article className="panel status-card">
           <span className="label">Connection</span>
           <strong className="value">
-            {loading ? 'Loading' : error ? 'Degraded' : 'Online'}
+            {error ? 'Degraded' : connected ? 'Realtime' : 'Connecting'}
           </strong>
           <span className="meta">
-            {error || 'UI polling Railway every 3 seconds'}
+            {error || `${deviceCount} device client${deviceCount === 1 ? '' : 's'} connected`}
           </span>
         </article>
       </section>

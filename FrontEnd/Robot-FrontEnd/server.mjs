@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import http from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { WebSocketServer } from 'ws'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -16,6 +17,9 @@ const state = {
   lastReportedState: 'unknown',
   lastSeenAt: null,
 }
+
+const uiClients = new Set()
+const deviceClients = new Set()
 
 const contentTypes = {
   '.css': 'text/css; charset=utf-8',
@@ -32,6 +36,57 @@ function sendJson(response, statusCode, payload) {
     'Cache-Control': 'no-store',
   })
   response.end(JSON.stringify(payload))
+}
+
+function createSnapshot() {
+  return JSON.stringify({
+    type: 'snapshot',
+    ...state,
+    deviceCount: deviceClients.size,
+  })
+}
+
+function broadcastSnapshot() {
+  const snapshot = createSnapshot()
+
+  for (const client of uiClients) {
+    if (client.readyState === client.OPEN) {
+      client.send(snapshot)
+    }
+  }
+
+  for (const client of deviceClients) {
+    if (client.readyState === client.OPEN) {
+      client.send(snapshot)
+    }
+  }
+}
+
+function registerClient(socket, role) {
+  socket.role = role
+
+  if (role === 'ui') {
+    uiClients.add(socket)
+  }
+
+  if (role === 'device') {
+    deviceClients.add(socket)
+    state.lastSeenAt = new Date().toISOString()
+  }
+
+  socket.send(createSnapshot())
+  broadcastSnapshot()
+}
+
+function unregisterClient(socket) {
+  uiClients.delete(socket)
+  deviceClients.delete(socket)
+}
+
+function relayLedCommand(nextState) {
+  state.desiredState = nextState
+  state.lastCommandAt = new Date().toISOString()
+  broadcastSnapshot()
 }
 
 async function readJson(request) {
@@ -55,7 +110,10 @@ function serveFile(response, filePath) {
 
 async function handleApi(request, response, pathname) {
   if (pathname === '/api/led' && request.method === 'GET') {
-    sendJson(response, 200, state)
+    sendJson(response, 200, {
+      ...state,
+      deviceCount: deviceClients.size,
+    })
     return true
   }
 
@@ -67,9 +125,11 @@ async function handleApi(request, response, pathname) {
       return true
     }
 
-    state.desiredState = payload.state
-    state.lastCommandAt = new Date().toISOString()
-    sendJson(response, 200, state)
+    relayLedCommand(payload.state)
+    sendJson(response, 200, {
+      ...state,
+      deviceCount: deviceClients.size,
+    })
     return true
   }
 
@@ -81,7 +141,11 @@ async function handleApi(request, response, pathname) {
     }
 
     state.lastSeenAt = new Date().toISOString()
-    sendJson(response, 200, state)
+    broadcastSnapshot()
+    sendJson(response, 200, {
+      ...state,
+      deviceCount: deviceClients.size,
+    })
     return true
   }
 
@@ -116,6 +180,76 @@ const server = http.createServer(async (request, response) => {
   } catch (error) {
     sendJson(response, 500, { error: error.message })
   }
+})
+
+const websocketServer = new WebSocketServer({ noServer: true })
+
+websocketServer.on('connection', (socket) => {
+  socket.on('message', (rawMessage) => {
+    try {
+      const payload = JSON.parse(rawMessage.toString())
+
+      if (payload.type === 'hello') {
+        if (payload.role !== 'ui' && payload.role !== 'device') {
+          socket.send(JSON.stringify({ type: 'error', message: 'invalid role' }))
+          return
+        }
+
+        registerClient(socket, payload.role)
+        return
+      }
+
+      if (payload.type === 'set-led') {
+        if (socket.role !== 'ui') {
+          socket.send(JSON.stringify({ type: 'error', message: 'ui only action' }))
+          return
+        }
+
+        if (payload.state !== 'on' && payload.state !== 'off') {
+          socket.send(JSON.stringify({ type: 'error', message: 'invalid state' }))
+          return
+        }
+
+        relayLedCommand(payload.state)
+        socket.send(JSON.stringify({ type: 'ack', state: payload.state }))
+        return
+      }
+
+      if (payload.type === 'device-state') {
+        if (socket.role !== 'device') {
+          socket.send(JSON.stringify({ type: 'error', message: 'device only action' }))
+          return
+        }
+
+        if (payload.state === 'on' || payload.state === 'off') {
+          state.lastReportedState = payload.state
+        }
+
+        state.lastSeenAt = new Date().toISOString()
+        broadcastSnapshot()
+      }
+    } catch (error) {
+      socket.send(JSON.stringify({ type: 'error', message: error.message }))
+    }
+  })
+
+  socket.on('close', () => {
+    unregisterClient(socket)
+    broadcastSnapshot()
+  })
+})
+
+server.on('upgrade', (request, socket, head) => {
+  const url = new URL(request.url ?? '/', `http://${request.headers.host}`)
+
+  if (url.pathname !== '/ws') {
+    socket.destroy()
+    return
+  }
+
+  websocketServer.handleUpgrade(request, socket, head, (websocket) => {
+    websocketServer.emit('connection', websocket, request)
+  })
 })
 
 server.listen(port, () => {
