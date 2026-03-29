@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import './App.css'
 
-const POLL_INTERVAL_MS = 3000
+const POLL_INTERVAL_MS = 500
 
 function formatTimestamp(value) {
   if (!value) {
