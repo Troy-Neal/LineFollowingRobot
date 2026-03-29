@@ -1,0 +1,74 @@
+:root {
+  --bg-top: #09111f;
+  --bg-bottom: #15304e;
+  --text: #d9e6f2;
+  --text-strong: #f8fbff;
+  --muted: #90aac2;
+  --accent: #7ee787;
+  --border: rgba(255, 255, 255, 0.08);
+  font-family:
+    'Space Grotesk',
+    'Segoe UI',
+    sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  color: var(--text);
+  background:
+    radial-gradient(circle at top left, rgba(126, 231, 135, 0.14), transparent 24%),
+    radial-gradient(circle at top right, rgba(106, 173, 255, 0.18), transparent 28%),
+    linear-gradient(160deg, var(--bg-top), var(--bg-bottom));
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+  background-size: 42px 42px;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.5), transparent 85%);
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+h1,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: clamp(2.5rem, 7vw, 5rem);
+  line-height: 0.95;
+  letter-spacing: -0.05em;
+  color: var(--text-strong);
+  margin-bottom: 18px;
+}
+
+a {
+  color: inherit;
+}
