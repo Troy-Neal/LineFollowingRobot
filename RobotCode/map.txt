@@ -1,0 +1,46 @@
+0 0 is top left
++ is down or right
+- is up or left
+1600mm by 1600mm
+
+Locations 
+    Do: (0,0) -> (400,400) (Square)
+    A: (1200,1200) (YELLOW)
+    B: (1200,200) (RED) (GREEN)
+    C: (800,800) (BLUE)
+    D: (600,1400) (RED)
+    E: (1500,1400) (RED)
+    F: (1500,600) (RED) (GREEN)
+    G: (1500,200) (RED)
+    H: (200,1400) (RED)
+    I: (800, 600) (GREEN) (BLUE)
+
+Nodes
+    N1: (300,600) (GREEN) (BLUE)
+    N2: (1200, 600) (GREEN)
+    N3: (600,1200) (YELLOW)
+    N4: (300,800) (BLUE)
+    N5: (1200,800) (BLUE) (YELLOW)
+    N6: (200,1200) (RED) (YELLOW)
+
+Paths
+    P1: Do -> B (RED)
+    P2: B -> G (RED)
+    P3: Do -> N6 (RED) 
+    P4: H -> D (RED)
+    P5: D -> E (RED)
+    P6: Do-> N1 (GREEN) 
+    P7: N1 -> I (GREEN)
+    P8: I -> N2 (GREEN)
+    P9: N2 -> F (GREEN) 
+    P10: G -> F (RED)
+    P11: F -> E (RED)
+    P12: N2 -> B (GREEN) 
+    P13: A -> N5 (YELLOW) 
+    P14: N3 -> A (YELLOW)
+    P15: N6 -> N3 (YELLOW) 
+    P16: N1 -> N4 (BLUE) 
+    P17: C -> I (BLUE) 
+    P18: N4 -> C (BLUE) 
+    P19: C -> N5 (BLUE) 
+    P20: H -> N6 (RED) 
