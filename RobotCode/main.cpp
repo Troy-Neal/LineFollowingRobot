@@ -40,7 +40,7 @@ constexpr uint8_t TCS34725_BDATAL = 0x1A;
 constexpr uint8_t TCS34725_ENABLE_PON = 0x01;
 constexpr uint8_t TCS34725_ENABLE_AEN = 0x02;
 constexpr uint8_t TCS34725_INTEGRATION_154MS = 0xC0;
-constexpr uint8_t TCS34725_GAIN_4X = 0x01;
+constexpr uint8_t TCS34725_GAIN_16X = 0x02;
 
 // Front ultrasonic sensor.
 constexpr int F_DIST_TRIG_PIN = 4;
@@ -229,7 +229,7 @@ bool initializeRgbSensor() {
     return false;
   }
 
-  if (!writeRgbRegister(TCS34725_CONTROL, TCS34725_GAIN_4X)) {
+  if (!writeRgbRegister(TCS34725_CONTROL, TCS34725_GAIN_16X)) {
     return false;
   }
 
@@ -255,29 +255,62 @@ bool readRgbSensor(RgbReading& reading) {
          readRgbRegister16(TCS34725_CDATAL, reading.clear);
 }
 
-COLOUR classifyColour(uint16_t red, uint16_t green, uint16_t blue, uint16_t clear) {
-  if (clear < 80) {
+COLOUR classifyColour(uint16_t red, uint16_t green, uint16_t blue,
+                      uint16_t clear) {
+  const float total = static_cast<float>(red + green + blue);
+  if (clear < 5 || total < 10.0F) {
     return BLACK;
   }
 
-  if (clear > 900 && red > 300 && green > 300 && blue > 300) {
-    return WHITE;
-  }
+  const float redRatio = red / total;
+  const float greenRatio = green / total;
+  const float blueRatio = blue / total;
+  const uint16_t dominant = max(red, max(green, blue));
+  const uint16_t weakest = min(red, min(green, blue));
+  const uint16_t chroma = dominant - weakest;
+  const float chromaRatio =
+      dominant > 0 ? static_cast<float>(chroma) / dominant : 1.0F;
 
-  if (red > green * 1.35F && red > blue * 1.35F) {
-    return RED;
-  }
-
-  if (green > red * 1.2F && green > blue * 1.2F) {
-    return GREEN;
-  }
-
-  if (blue > red * 1.2F && blue > green * 1.2F) {
+  if (blue > 35 && blueRatio > 0.38F && blue > red * 1.18F &&
+      blue > green * 1.08F && chroma > 12) {
     return BLUE;
   }
 
-  if (red > 220 && green > 220 && blue < 180) {
+  if (clear > 18000 && total > 20000.0F && chromaRatio < 0.55F &&
+      redRatio > 0.22F && redRatio < 0.48F && greenRatio > 0.22F &&
+      greenRatio < 0.44F && blueRatio > 0.14F && blueRatio < 0.32F) {
+    return WHITE;
+  }
+
+  if (red > 20 && green > 20 && blueRatio < 0.16F && redRatio > 0.32F &&
+      greenRatio > 0.28F && fabsf(redRatio - greenRatio) < 0.18F) {
     return YELLOW;
+  }
+
+  if (redRatio > 0.46F && greenRatio < 0.33F && red > green * 1.22F &&
+      red > blue * 1.25F) {
+    return RED;
+  }
+
+  if (greenRatio > 0.38F && green > red * 1.08F && green > blue * 1.18F &&
+      blueRatio < 0.34F) {
+    return GREEN;
+  }
+
+  if (blue > 18 && blueRatio > 0.34F && blue > red * 1.08F &&
+      blue > green * 1.04F && chroma > 8) {
+    return BLUE;
+  }
+
+  if (clear < 7000 || total < 7000.0F ||
+      (clear < 12000 && total < 12000.0F && chromaRatio < 0.55F)) {
+    return BLACK;
+  }
+
+  if (clear > 26000 && total > 28000.0F && chromaRatio < 0.5F &&
+      blueRatio > 0.16F && blueRatio < 0.36F && redRatio > 0.24F &&
+      redRatio < 0.45F && greenRatio > 0.24F && greenRatio < 0.45F) {
+    return WHITE;
   }
 
   return BLACK;
