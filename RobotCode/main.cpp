@@ -42,7 +42,7 @@ constexpr int RIGHT_MOTOR_IN2_PIN = 23;
 constexpr int RIGHT_MOTOR_EN_PIN = 17;
 constexpr int LEFT_MOTOR_PWM_CHANNEL = 0;
 constexpr int RIGHT_MOTOR_PWM_CHANNEL = 1;
-constexpr int MOTOR_PWM_FREQUENCY = 1000;
+constexpr int MOTOR_PWM_FREQUENCY = 18000;
 constexpr int MOTOR_PWM_RESOLUTION_BITS = 8;
 constexpr int DEFAULT_MOTOR_SPEED = 180;
 constexpr bool LEFT_MOTOR_INVERTED = false;
@@ -418,9 +418,9 @@ void updateLineFollow() {
       currentDriveMode == DRIVE_LINE_FOLLOW_ACTIVE &&
       detectedColour == desiredColour;
   latestLineFollowDebug = {onLine, detectedColour};
-  constexpr int FORWARD_SPEED = 120;
-  constexpr int SWEEP_SPEED = 115;
-  constexpr int CREEP_FORWARD_SPEED = 70;
+  constexpr int FORWARD_SPEED = 210;
+  constexpr int SWEEP_SPEED = 190;
+  constexpr int CREEP_FORWARD_SPEED = 150;
 
   if (onLine) {
     lineReacquireStartedAt = 0;
