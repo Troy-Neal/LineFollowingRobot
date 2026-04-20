@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import './App.css'
 
 const PAD_RADIUS = 110
+const MAX_LOGS = 80
 
 const STOP_COMMAND = {
   x: 0,
@@ -69,6 +70,18 @@ function createDriveCommand(x, y) {
   }
 }
 
+function formatLogTimestamp(value) {
+  if (!value) {
+    return ''
+  }
+
+  return new Date(value).toLocaleTimeString()
+}
+
+function appendLog(entries, entry) {
+  return [entry, ...entries].slice(0, MAX_LOGS)
+}
+
 function App() {
   const [lastSeenAt, setLastSeenAt] = useState(null)
   const [lastCommandAt, setLastCommandAt] = useState(null)
@@ -76,6 +89,13 @@ function App() {
   const [error, setError] = useState('')
   const [connected, setConnected] = useState(false)
   const [driveCommand, setDriveCommand] = useState(STOP_COMMAND)
+  const [robotLogs, setRobotLogs] = useState([])
+  const [telemetry, setTelemetry] = useState({
+    motors: { left: 0, right: 0 },
+    line: null,
+    distance: null,
+    colour: 'unknown',
+  })
   const socketRef = useRef(null)
   const padRef = useRef(null)
   const pointerIdRef = useRef(null)
@@ -85,6 +105,13 @@ function App() {
     setLastCommandAt(payload.lastCommandAt ?? null)
     setDeviceCount(payload.deviceCount ?? 0)
     setDriveCommand(payload.driveCommand ?? STOP_COMMAND)
+    setRobotLogs(Array.isArray(payload.robotLogs) ? payload.robotLogs : [])
+    setTelemetry(payload.telemetry ?? {
+      motors: { left: 0, right: 0 },
+      line: null,
+      distance: null,
+      colour: 'unknown',
+    })
   }
 
   useEffect(() => {
@@ -108,6 +135,10 @@ function App() {
 
           if (payload.type === 'snapshot') {
             applySnapshot(payload)
+          }
+
+          if (payload.type === 'robot-log' && payload.entry) {
+            setRobotLogs((entries) => appendLog(entries, payload.entry))
           }
 
           if (payload.type === 'error') {
@@ -276,10 +307,51 @@ function App() {
 
           <article className="panel status-card">
             <span className="label">Robot Check-In</span>
-            <strong className="value">Telemetry</strong>
+            <strong className="value telemetry-colour">{telemetry.colour ?? 'unknown'}</strong>
             <span className="meta">Last seen: {formatTimestamp(lastSeenAt)}</span>
           </article>
         </section>
+      </section>
+
+      <section className="telemetry-grid">
+        <article className="panel status-card telemetry-card">
+          <span className="label">Robot Telemetry</span>
+          <strong className="value telemetry-inline">
+            Motors {telemetry.motors?.left ?? 0} / {telemetry.motors?.right ?? 0}
+          </strong>
+          <span className="meta">
+            Line: {telemetry.line ? `FF ${telemetry.line.ff} FS ${telemetry.line.fs} FT ${telemetry.line.ft} BF ${telemetry.line.bf} BS ${telemetry.line.bs} BT ${telemetry.line.bt}` : 'No line data yet'}
+          </span>
+          <span className="meta">
+            Distance: {telemetry.distance ? `Front ${telemetry.distance.frontCm} cm, Back ${telemetry.distance.backCm} cm` : 'No distance data yet'}
+          </span>
+        </article>
+
+        <article className="panel log-panel">
+          <div className="log-header">
+            <div>
+              <span className="label">Robot Logs</span>
+              <strong className="log-title">Live device output</strong>
+            </div>
+            <span className="meta">{robotLogs.length} entries</span>
+          </div>
+
+          <div className="log-list">
+            {robotLogs.length === 0 ? (
+              <p className="log-empty">No robot logs yet.</p>
+            ) : (
+              robotLogs.map((entry) => (
+                <article key={entry.id} className={`log-entry ${entry.level ?? 'info'}`}>
+                  <div className="log-meta-row">
+                    <span className="log-level">{entry.level ?? 'info'}</span>
+                    <time className="log-time">{formatLogTimestamp(entry.timestamp)}</time>
+                  </div>
+                  <p className="log-message">{entry.message}</p>
+                </article>
+              ))
+            )}
+          </div>
+        </article>
       </section>
     </main>
   )

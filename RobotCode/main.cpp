@@ -20,9 +20,22 @@ constexpr int FS_LINE_PIN = 32;
 constexpr int FT_LINE_PIN = 34;
 
 // Back line following sensors.
-constexpr int BF_LINE_PIN = 18;
+constexpr int BF_LINE_PIN = 33;
 constexpr int BS_LINE_PIN = 19;
-constexpr int BT_LINE_PIN = 33;
+constexpr int BT_LINE_PIN = 18;
+
+// Motor driver pins.
+constexpr int LEFT_MOTOR_EN_PIN = 25;
+constexpr int LEFT_MOTOR_IN1_PIN = 26;
+constexpr int LEFT_MOTOR_IN2_PIN = 27;
+constexpr int RIGHT_MOTOR_IN1_PIN = 14;
+constexpr int RIGHT_MOTOR_IN2_PIN = 23;
+constexpr int RIGHT_MOTOR_EN_PIN = 17;
+constexpr int LEFT_MOTOR_PWM_CHANNEL = 0;
+constexpr int RIGHT_MOTOR_PWM_CHANNEL = 1;
+constexpr int MOTOR_PWM_FREQUENCY = 1000;
+constexpr int MOTOR_PWM_RESOLUTION_BITS = 8;
+constexpr int DEFAULT_MOTOR_SPEED = 180;
 
 // RGB sensor I2C pins.
 constexpr int RGB_SDA_PIN = 21;
@@ -73,6 +86,11 @@ struct RgbReading {
   uint16_t clear;
 };
 
+struct MotorCommand {
+  int leftSpeed;
+  int rightSpeed;
+};
+
 String desiredState = "off";
 bool ledIsOn = false;
 unsigned long lastHeartbeatAt = 0;
@@ -80,6 +98,56 @@ WebSocketsClient webSocket;
 bool websocketReady = false;
 COLOUR desiredColour = BLUE;
 bool rgbSensorReady = false;
+MotorCommand currentMotorCommand = {0, 0};
+
+String escapeJsonString(const String& value) {
+  String escaped;
+  escaped.reserve(value.length() + 8);
+
+  for (size_t i = 0; i < value.length(); ++i) {
+    const char current = value[i];
+    switch (current) {
+      case '\\':
+        escaped += "\\\\";
+        break;
+      case '"':
+        escaped += "\\\"";
+        break;
+      case '\n':
+        escaped += "\\n";
+        break;
+      case '\r':
+        escaped += "\\r";
+        break;
+      case '\t':
+        escaped += "\\t";
+        break;
+      default:
+        escaped += current;
+        break;
+    }
+  }
+
+  return escaped;
+}
+
+void sendRobotLog(const char* level, const String& message) {
+  Serial.print("[");
+  Serial.print(level);
+  Serial.print("] ");
+  Serial.println(message);
+
+  if (!webSocket.isConnected()) {
+    return;
+  }
+
+  String payload = "{\"type\":\"robot-log\",\"level\":\"";
+  payload += level;
+  payload += "\",\"message\":\"";
+  payload += escapeJsonString(message);
+  payload += "\"}";
+  webSocket.sendTXT(payload);
+}
 
 bool extractState(const String& payload, const char* key, String& result) {
   String marker = "\"";
@@ -98,6 +166,52 @@ bool extractState(const String& payload, const char* key, String& result) {
   }
 
   result = payload.substring(valueStart, valueEnd);
+  return true;
+}
+
+bool extractStringValue(const String& payload, const char* key, String& result) {
+  return extractState(payload, key, result);
+}
+
+bool extractIntValue(const String& payload, const char* key, int& result) {
+  String marker = "\"";
+  marker += key;
+  marker += "\":";
+
+  const int markerIndex = payload.indexOf(marker);
+  if (markerIndex < 0) {
+    return false;
+  }
+
+  int valueStart = markerIndex + marker.length();
+  while (valueStart < payload.length() && payload[valueStart] == ' ') {
+    ++valueStart;
+  }
+
+  bool quoted = false;
+  if (valueStart < payload.length() && payload[valueStart] == '"') {
+    quoted = true;
+    ++valueStart;
+  }
+
+  int valueEnd = valueStart;
+  while (valueEnd < payload.length()) {
+    const char current = payload[valueEnd];
+    if (quoted) {
+      if (current == '"') {
+        break;
+      }
+    } else if (current == ',' || current == '}' || current == ' ') {
+      break;
+    }
+    ++valueEnd;
+  }
+
+  if (valueEnd <= valueStart) {
+    return false;
+  }
+
+  result = payload.substring(valueStart, valueEnd).toInt();
   return true;
 }
 
@@ -123,6 +237,48 @@ LineSensorReadings readLineSensors() {
       readLineSensor(BS_LINE_PIN),
       readLineSensor(BT_LINE_PIN),
   };
+}
+
+void initializeMotors() {
+  pinMode(LEFT_MOTOR_IN1_PIN, OUTPUT);
+  pinMode(LEFT_MOTOR_IN2_PIN, OUTPUT);
+  pinMode(RIGHT_MOTOR_IN1_PIN, OUTPUT);
+  pinMode(RIGHT_MOTOR_IN2_PIN, OUTPUT);
+
+  ledcSetup(LEFT_MOTOR_PWM_CHANNEL, MOTOR_PWM_FREQUENCY,
+            MOTOR_PWM_RESOLUTION_BITS);
+  ledcSetup(RIGHT_MOTOR_PWM_CHANNEL, MOTOR_PWM_FREQUENCY,
+            MOTOR_PWM_RESOLUTION_BITS);
+  ledcAttachPin(LEFT_MOTOR_EN_PIN, LEFT_MOTOR_PWM_CHANNEL);
+  ledcAttachPin(RIGHT_MOTOR_EN_PIN, RIGHT_MOTOR_PWM_CHANNEL);
+}
+
+void applySingleMotor(int in1Pin, int in2Pin, int pwmChannel, int speed) {
+  const int clippedSpeed = constrain(speed, -255, 255);
+  if (clippedSpeed == 0) {
+    digitalWrite(in1Pin, LOW);
+    digitalWrite(in2Pin, LOW);
+    ledcWrite(pwmChannel, 0);
+    return;
+  }
+
+  digitalWrite(in1Pin, clippedSpeed > 0 ? HIGH : LOW);
+  digitalWrite(in2Pin, clippedSpeed > 0 ? LOW : HIGH);
+  ledcWrite(pwmChannel, abs(clippedSpeed));
+}
+
+void applyMotorCommand(int leftSpeed, int rightSpeed) {
+  currentMotorCommand.leftSpeed = constrain(leftSpeed, -255, 255);
+  currentMotorCommand.rightSpeed = constrain(rightSpeed, -255, 255);
+
+  applySingleMotor(LEFT_MOTOR_IN1_PIN, LEFT_MOTOR_IN2_PIN,
+                   LEFT_MOTOR_PWM_CHANNEL, currentMotorCommand.leftSpeed);
+  applySingleMotor(RIGHT_MOTOR_IN1_PIN, RIGHT_MOTOR_IN2_PIN,
+                   RIGHT_MOTOR_PWM_CHANNEL, currentMotorCommand.rightSpeed);
+}
+
+void stopMotors() {
+  applyMotorCommand(0, 0);
 }
 
 void initializeUltrasonicSensor(int trigPin, int echoPin) {
@@ -350,6 +506,7 @@ const char* colourToString(COLOUR colour) {
 
 void initializeSensors() {
   initializeLineSensors();
+  initializeMotors();
   initializeUltrasonicSensor(F_DIST_TRIG_PIN, F_DIST_ECHO_PIN);
   initializeUltrasonicSensor(B_DIST_TRIG_PIN, B_DIST_ECHO_PIN);
   initializeRgbSensorBus();
@@ -374,6 +531,7 @@ void connectToWifi() {
   Serial.println();
   Serial.print("Connected. IP: ");
   Serial.println(WiFi.localIP());
+  sendRobotLog("info", "Wi-Fi connected: " + WiFi.localIP().toString());
 }
 
 void sendHello() {
@@ -385,23 +543,94 @@ void sendHeartbeat() {
     return;
   }
 
+  const LineSensorReadings lineReadings = readLineSensors();
+  const UltrasonicReadings ultrasonicReadings = readUltrasonicSensors();
+  const COLOUR detectedColour = readDetectedColour();
+
   String payload = "{\"type\":\"device-state\",\"state\":\"";
   payload += ledIsOn ? "on" : "off";
+  payload += "\",\"motors\":{\"left\":";
+  payload += currentMotorCommand.leftSpeed;
+  payload += ",\"right\":";
+  payload += currentMotorCommand.rightSpeed;
+  payload += "},\"line\":{\"ff\":";
+  payload += lineReadings.frontFar;
+  payload += ",\"fs\":";
+  payload += lineReadings.frontSide;
+  payload += ",\"ft\":";
+  payload += lineReadings.frontThird;
+  payload += ",\"bf\":";
+  payload += lineReadings.backFar;
+  payload += ",\"bs\":";
+  payload += lineReadings.backSide;
+  payload += ",\"bt\":";
+  payload += lineReadings.backThird;
+  payload += "},\"distance\":{\"frontCm\":";
+  payload += String(ultrasonicReadings.frontCm, 2);
+  payload += ",\"backCm\":";
+  payload += String(ultrasonicReadings.backCm, 2);
+  payload += "},\"colour\":\"";
+  payload += colourToString(detectedColour);
   payload += "\"}";
   webSocket.sendTXT(payload);
 }
 
+void applyNamedMotorCommand(const String& command, int speed) {
+  const int clippedSpeed = constrain(speed, 0, 255);
+
+  if (command == "forward") {
+    applyMotorCommand(clippedSpeed, clippedSpeed);
+  } else if (command == "backward" || command == "reverse") {
+    applyMotorCommand(-clippedSpeed, -clippedSpeed);
+  } else if (command == "left") {
+    applyMotorCommand(-clippedSpeed, clippedSpeed);
+  } else if (command == "right") {
+    applyMotorCommand(clippedSpeed, -clippedSpeed);
+  } else if (command == "stop") {
+    stopMotors();
+  }
+}
+
 void handleMessage(const String& payload) {
-  Serial.print("WS message: ");
-  Serial.println(payload);
+  sendRobotLog("info", "WS message: " + payload);
 
   String nextState;
+  String motionCommand;
+  int leftSpeed = 0;
+  int rightSpeed = 0;
+  int speed = DEFAULT_MOTOR_SPEED;
 
   if (extractState(payload, "desiredState", nextState) && nextState != desiredState) {
     desiredState = nextState;
     applyLedState(desiredState);
-    Serial.print("LED updated to ");
-    Serial.println(desiredState);
+    sendRobotLog("info", "LED updated to " + desiredState);
+  }
+
+  if (extractIntValue(payload, "speed", speed) ||
+      extractIntValue(payload, "motorSpeed", speed)) {
+    speed = constrain(speed, 0, 255);
+  }
+
+  const bool hasDirectMotorSpeeds =
+      extractIntValue(payload, "leftSpeed", leftSpeed) &&
+      extractIntValue(payload, "rightSpeed", rightSpeed);
+
+  if (hasDirectMotorSpeeds) {
+    applyMotorCommand(leftSpeed, rightSpeed);
+    sendRobotLog(
+        "info", "Motors updated left=" + String(currentMotorCommand.leftSpeed) +
+                    " right=" + String(currentMotorCommand.rightSpeed));
+    return;
+  }
+
+  if (extractStringValue(payload, "motorCommand", motionCommand) ||
+      extractStringValue(payload, "direction", motionCommand) ||
+      extractStringValue(payload, "command", motionCommand) ||
+      extractStringValue(payload, "movement", motionCommand)) {
+    motionCommand.toLowerCase();
+    applyNamedMotorCommand(motionCommand, speed);
+    sendRobotLog("info", "Motor command applied: " + motionCommand +
+                             " speed=" + String(speed));
   }
 }
 
@@ -409,8 +638,11 @@ void handleEvent(WStype_t type, uint8_t* payload, size_t length) {
   switch (type) {
     case WStype_CONNECTED:
       websocketReady = true;
-      Serial.println("WebSocket connected");
+      sendRobotLog("info", "WebSocket connected");
       sendHello();
+      sendRobotLog("info", rgbSensorReady ? "RGB sensor ready"
+                                          : "RGB sensor not detected");
+      sendRobotLog("info", "Robot online");
       sendHeartbeat();
       break;
     case WStype_DISCONNECTED:
@@ -449,6 +681,7 @@ void setup() {
   delay(200);
 
   initializeSensors();
+  stopMotors();
 
   if (rgbSensorReady) {
     Serial.println("TCS34725 ready");

@@ -10,6 +10,7 @@ const __dirname = path.dirname(__filename)
 const distDir = path.join(__dirname, 'dist')
 const indexPath = path.join(distDir, 'index.html')
 const port = Number.parseInt(process.env.PORT ?? '3000', 10)
+const MAX_ROBOT_LOGS = 80
 
 const state = {
   desiredState: 'off',
@@ -23,6 +24,13 @@ const state = {
     right: 0,
     mode: 'stop',
   },
+  telemetry: {
+    motors: { left: 0, right: 0 },
+    line: null,
+    distance: null,
+    colour: 'unknown',
+  },
+  robotLogs: [],
 }
 
 const uiClients = new Set()
@@ -45,6 +53,28 @@ function sendJson(response, statusCode, payload) {
   response.end(JSON.stringify(payload))
 }
 
+function broadcastTo(clients, payload) {
+  for (const client of clients) {
+    if (client.readyState === client.OPEN) {
+      client.send(payload)
+    }
+  }
+}
+
+function pushRobotLog(entry) {
+  state.robotLogs = [entry, ...state.robotLogs].slice(0, MAX_ROBOT_LOGS)
+}
+
+function createRobotLog(level, message, source = 'robot', timestamp = new Date().toISOString()) {
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    level,
+    message,
+    source,
+    timestamp,
+  }
+}
+
 function createSnapshot() {
   return JSON.stringify({
     type: 'snapshot',
@@ -55,18 +85,17 @@ function createSnapshot() {
 
 function broadcastSnapshot() {
   const snapshot = createSnapshot()
+  broadcastTo(uiClients, snapshot)
+  broadcastTo(deviceClients, snapshot)
+}
 
-  for (const client of uiClients) {
-    if (client.readyState === client.OPEN) {
-      client.send(snapshot)
-    }
-  }
+function broadcastRobotLog(entry) {
+  const payload = JSON.stringify({ type: 'robot-log', entry })
+  broadcastTo(uiClients, payload)
+}
 
-  for (const client of deviceClients) {
-    if (client.readyState === client.OPEN) {
-      client.send(snapshot)
-    }
-  }
+function sendDevicePayload(payload) {
+  broadcastTo(deviceClients, JSON.stringify(payload))
 }
 
 function registerClient(socket, role) {
@@ -93,12 +122,26 @@ function unregisterClient(socket) {
 function relayLedCommand(nextState) {
   state.desiredState = nextState
   state.lastCommandAt = new Date().toISOString()
+  sendDevicePayload({ type: 'control', desiredState: nextState })
   broadcastSnapshot()
 }
 
 function relayDriveCommand(command) {
   state.driveCommand = command
   state.lastCommandAt = new Date().toISOString()
+
+  const leftSpeed = Math.round(Number(command.left ?? 0) * 255)
+  const rightSpeed = Math.round(Number(command.right ?? 0) * 255)
+  const speed = Math.max(Math.abs(leftSpeed), Math.abs(rightSpeed))
+
+  sendDevicePayload({
+    type: 'control',
+    motorCommand: String(command.mode ?? 'stop'),
+    speed,
+    leftSpeed,
+    rightSpeed,
+  })
+
   broadcastSnapshot()
 }
 
@@ -165,7 +208,7 @@ async function handleApi(request, response, pathname) {
   return false
 }
 
-const server = http.createServer(async (request, response) => {
+const serverInstance = http.createServer(async (request, response) => {
   try {
     const url = new URL(request.url ?? '/', `http://${request.headers.host}`)
     const pathname = url.pathname
@@ -257,7 +300,33 @@ websocketServer.on('connection', (socket) => {
           state.lastReportedState = payload.state
         }
 
+        state.telemetry = {
+          motors: payload.motors ?? state.telemetry.motors,
+          line: payload.line ?? state.telemetry.line,
+          distance: payload.distance ?? state.telemetry.distance,
+          colour: payload.colour ?? state.telemetry.colour,
+        }
         state.lastSeenAt = new Date().toISOString()
+        broadcastSnapshot()
+        return
+      }
+
+      if (payload.type === 'robot-log') {
+        if (socket.role !== 'device') {
+          socket.send(JSON.stringify({ type: 'error', message: 'device only action' }))
+          return
+        }
+
+        const entry = createRobotLog(
+          String(payload.level ?? 'info'),
+          String(payload.message ?? ''),
+          'robot',
+          payload.timestamp ? String(payload.timestamp) : new Date().toISOString(),
+        )
+
+        pushRobotLog(entry)
+        state.lastSeenAt = new Date().toISOString()
+        broadcastRobotLog(entry)
         broadcastSnapshot()
       }
     } catch (error) {
@@ -271,7 +340,7 @@ websocketServer.on('connection', (socket) => {
   })
 })
 
-server.on('upgrade', (request, socket, head) => {
+serverInstance.on('upgrade', (request, socket, head) => {
   const url = new URL(request.url ?? '/', `http://${request.headers.host}`)
 
   if (url.pathname !== '/ws') {
@@ -284,6 +353,6 @@ server.on('upgrade', (request, socket, head) => {
   })
 })
 
-server.listen(port, () => {
+serverInstance.listen(port, () => {
   console.log(`Railway server listening on port ${port}`)
 })

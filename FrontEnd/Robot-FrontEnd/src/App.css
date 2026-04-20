@@ -5,7 +5,8 @@
 }
 
 .hero,
-.controller-grid {
+.controller-grid,
+.telemetry-grid {
   max-width: 1120px;
   margin: 0 auto;
 }
@@ -151,13 +152,19 @@
   background: linear-gradient(135deg, #ff7b54, #ff4d6d);
 }
 
-.status-grid {
+.status-grid,
+.telemetry-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 18px;
 }
 
-.status-card {
+.telemetry-grid {
+  margin-top: 18px;
+}
+
+.status-card,
+.log-panel {
   padding: 24px;
   display: grid;
   gap: 12px;
@@ -200,6 +207,82 @@
   color: var(--muted);
 }
 
+.telemetry-inline,
+.telemetry-colour {
+  text-transform: capitalize;
+}
+
+.log-panel {
+  min-height: 360px;
+}
+
+.log-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: end;
+}
+
+.log-title {
+  display: block;
+  margin-top: 6px;
+  font-size: 1.2rem;
+  color: var(--text-strong);
+}
+
+.log-list {
+  display: grid;
+  gap: 10px;
+  max-height: 460px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.log-entry {
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.log-entry.info {
+  border-left: 4px solid #7ee787;
+}
+
+.log-entry.warn {
+  border-left: 4px solid #ffd76f;
+}
+
+.log-entry.error {
+  border-left: 4px solid #ff7b54;
+}
+
+.log-meta-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.log-level,
+.log-time {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+}
+
+.log-message,
+.log-empty {
+  margin: 0;
+  color: var(--text-strong);
+  line-height: 1.45;
+}
+
+.log-empty {
+  color: var(--muted);
+}
+
 @media (max-width: 960px) {
   .shell {
     padding: 20px 14px 40px;
@@ -210,11 +293,16 @@
   }
 
   .controller-grid,
-  .status-grid {
+  .status-grid,
+  .telemetry-grid {
     grid-template-columns: 1fr;
   }
 
   .controller-panel {
     padding: 20px;
+  }
+
+  .log-panel {
+    min-height: 0;
   }
 }
