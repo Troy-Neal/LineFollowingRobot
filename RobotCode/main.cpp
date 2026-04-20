@@ -14,16 +14,21 @@ constexpr unsigned long HEARTBEAT_INTERVAL_MS = 1000;
 constexpr unsigned long RECONNECT_INTERVAL_MS = 2000;
 constexpr unsigned long ULTRASONIC_TIMEOUT_US = 30000;
 constexpr unsigned long LINE_FOLLOW_INTERVAL_MS = 20;
+constexpr unsigned long DISTANCE_READ_INTERVAL_MS = 60;
+constexpr float FORWARD_BLOCK_DISTANCE_CM = 15.0F;
+constexpr float FORWARD_CAUTION_DISTANCE_CM = 25.0F;
+constexpr int MIN_INCREMENTAL_FORWARD_SPEED = 40;
+constexpr int MAX_INCREMENTAL_FORWARD_SPEED = 90;
 
 // Front line following sensors.
-constexpr int FF_LINE_PIN = 35;
-constexpr int FS_LINE_PIN = 32;
-constexpr int FT_LINE_PIN = 34;
+constexpr int FF_LINE_PIN = 33;
+constexpr int FS_LINE_PIN = 19;
+constexpr int FT_LINE_PIN = 18;
 
 // Back line following sensors.
-constexpr int BF_LINE_PIN = 33;
-constexpr int BS_LINE_PIN = 19;
-constexpr int BT_LINE_PIN = 18;
+constexpr int BF_LINE_PIN = 35;
+constexpr int BS_LINE_PIN = 34;
+constexpr int BT_LINE_PIN = 32;
 
 // Motor driver pins.
 constexpr int LEFT_MOTOR_EN_PIN = 25;
@@ -103,10 +108,16 @@ WebSocketsClient webSocket;
 bool websocketReady = false;
 COLOUR desiredColour = BLUE;
 bool rgbSensorReady = false;
+MotorCommand requestedMotorCommand = {0, 0};
 MotorCommand currentMotorCommand = {0, 0};
 DriveMode currentDriveMode = DRIVE_MANUAL;
 unsigned long lastLineFollowAt = 0;
 int lastLineFollowTurn = 0;
+unsigned long lastDistanceReadAt = 0;
+float latestFrontDistanceCm = -1.0F;
+float latestBackDistanceCm = -1.0F;
+
+float readFrontDistanceCm();
 
 String escapeJsonString(const String& value) {
   String escaped;
@@ -278,8 +289,39 @@ void applySingleMotor(int in1Pin, int in2Pin, int pwmChannel, int speed,
 }
 
 void applyMotorCommand(int leftSpeed, int rightSpeed) {
-  currentMotorCommand.leftSpeed = constrain(leftSpeed, -255, 255);
-  currentMotorCommand.rightSpeed = constrain(rightSpeed, -255, 255);
+  requestedMotorCommand.leftSpeed = constrain(leftSpeed, -255, 255);
+  requestedMotorCommand.rightSpeed = constrain(rightSpeed, -255, 255);
+
+  currentMotorCommand.leftSpeed = requestedMotorCommand.leftSpeed;
+  currentMotorCommand.rightSpeed = requestedMotorCommand.rightSpeed;
+
+  if (latestFrontDistanceCm > 0.0F &&
+      latestFrontDistanceCm < FORWARD_BLOCK_DISTANCE_CM) {
+    if (currentMotorCommand.leftSpeed > 0) {
+      currentMotorCommand.leftSpeed = 0;
+    }
+    if (currentMotorCommand.rightSpeed > 0) {
+      currentMotorCommand.rightSpeed = 0;
+    }
+  } else if (latestFrontDistanceCm > 0.0F &&
+             latestFrontDistanceCm < FORWARD_CAUTION_DISTANCE_CM) {
+    const float distanceWindow =
+        FORWARD_CAUTION_DISTANCE_CM - FORWARD_BLOCK_DISTANCE_CM;
+    const float progress =
+        (latestFrontDistanceCm - FORWARD_BLOCK_DISTANCE_CM) / distanceWindow;
+    const int maxForwardSpeed =
+        MIN_INCREMENTAL_FORWARD_SPEED +
+        static_cast<int>((MAX_INCREMENTAL_FORWARD_SPEED -
+                          MIN_INCREMENTAL_FORWARD_SPEED) *
+                         constrain(progress, 0.0F, 1.0F));
+
+    if (currentMotorCommand.leftSpeed > maxForwardSpeed) {
+      currentMotorCommand.leftSpeed = maxForwardSpeed;
+    }
+    if (currentMotorCommand.rightSpeed > maxForwardSpeed) {
+      currentMotorCommand.rightSpeed = maxForwardSpeed;
+    }
+  }
 
   applySingleMotor(LEFT_MOTOR_IN1_PIN, LEFT_MOTOR_IN2_PIN,
                    LEFT_MOTOR_PWM_CHANNEL, currentMotorCommand.leftSpeed,
@@ -291,6 +333,10 @@ void applyMotorCommand(int leftSpeed, int rightSpeed) {
 
 void stopMotors() {
   applyMotorCommand(0, 0);
+}
+
+void enforceMotorSafety() {
+  applyMotorCommand(requestedMotorCommand.leftSpeed, requestedMotorCommand.rightSpeed);
 }
 
 const char* driveModeToString(DriveMode mode) {
@@ -306,7 +352,7 @@ const char* driveModeToString(DriveMode mode) {
 }
 
 bool sensorSeesLine(int reading) {
-  return reading == LOW;
+  return reading == HIGH;
 }
 
 void startLineFollowMode() {
@@ -337,10 +383,10 @@ void updateLineFollow() {
   lastLineFollowAt = millis();
 
   const LineSensorReadings readings = readLineSensors();
-  const bool leftOnLine = sensorSeesLine(readings.frontFar);
-  const bool centreOnLine = sensorSeesLine(readings.frontSide);
-  const bool rightOnLine = sensorSeesLine(readings.frontThird);
-  const bool anyOnLine = leftOnLine || centreOnLine || rightOnLine;
+  const bool firstOnLine = sensorSeesLine(readings.frontFar);
+  const bool secondOnLine = sensorSeesLine(readings.frontSide);
+  const bool thirdOnLine = sensorSeesLine(readings.frontThird);
+  const bool anyOnLine = firstOnLine || secondOnLine || thirdOnLine;
   constexpr int FORWARD_SPEED = 150;
   constexpr int TURN_SPEED = 140;
   constexpr int SEARCH_SPEED = 110;
@@ -366,21 +412,21 @@ void updateLineFollow() {
     sendRobotLog("info", "Line acquired. Following started.");
   }
 
-  if (centreOnLine && !leftOnLine && !rightOnLine) {
+  if (secondOnLine && !firstOnLine && !thirdOnLine) {
     lastLineFollowTurn = 0;
     applyMotorCommand(FORWARD_SPEED, FORWARD_SPEED);
     return;
   }
 
-  if (leftOnLine && !rightOnLine) {
+  if (firstOnLine && !thirdOnLine) {
     lastLineFollowTurn = -1;
-    applyMotorCommand(TURN_SPEED / 3, TURN_SPEED);
+    applyMotorCommand(TURN_SPEED, TURN_SPEED / 3);
     return;
   }
 
-  if (rightOnLine && !leftOnLine) {
+  if (thirdOnLine && !firstOnLine) {
     lastLineFollowTurn = 1;
-    applyMotorCommand(TURN_SPEED, TURN_SPEED / 3);
+    applyMotorCommand(TURN_SPEED / 3, TURN_SPEED);
     return;
   }
 
@@ -421,6 +467,17 @@ float readBackDistanceCm() {
 
 UltrasonicReadings readUltrasonicSensors() {
   return {readFrontDistanceCm(), readBackDistanceCm()};
+}
+
+void updateDistanceReadings() {
+  if (millis() - lastDistanceReadAt < DISTANCE_READ_INTERVAL_MS) {
+    return;
+  }
+
+  lastDistanceReadAt = millis();
+  const UltrasonicReadings readings = readUltrasonicSensors();
+  latestFrontDistanceCm = readings.frontCm;
+  latestBackDistanceCm = readings.backCm;
 }
 
 void initializeRgbSensorBus() {
@@ -650,7 +707,6 @@ void sendHeartbeat() {
   }
 
   const LineSensorReadings lineReadings = readLineSensors();
-  const UltrasonicReadings ultrasonicReadings = readUltrasonicSensors();
   const COLOUR detectedColour = readDetectedColour();
 
   String payload = "{\"type\":\"device-state\",\"state\":\"";
@@ -675,9 +731,9 @@ void sendHeartbeat() {
   payload += ",\"bt\":";
   payload += lineReadings.backThird;
   payload += "},\"distance\":{\"frontCm\":";
-  payload += String(ultrasonicReadings.frontCm, 2);
+  payload += String(latestFrontDistanceCm, 2);
   payload += ",\"backCm\":";
-  payload += String(ultrasonicReadings.backCm, 2);
+  payload += String(latestBackDistanceCm, 2);
   payload += "},\"colour\":\"";
   payload += colourToString(detectedColour);
   payload += "\"}";
@@ -807,6 +863,7 @@ void setup() {
   delay(200);
 
   initializeSensors();
+  updateDistanceReadings();
   stopLineFollowMode();
 
   if (rgbSensorReady) {
@@ -825,7 +882,9 @@ void loop() {
   }
 
   webSocket.loop();
+  updateDistanceReadings();
   updateLineFollow();
+  enforceMotorSafety();
 
   if (websocketReady && millis() - lastHeartbeatAt >= HEARTBEAT_INTERVAL_MS) {
     lastHeartbeatAt = millis();

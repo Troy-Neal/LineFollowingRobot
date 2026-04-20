@@ -365,6 +365,7 @@ function App() {
             <span className="label">Robot Mode</span>
             <strong className="value telemetry-colour">{robotMode}</strong>
             <span className="meta">Last seen: {formatTimestamp(lastSeenAt)}</span>
+            <span className="meta">Colour: {telemetry.colour ?? 'unknown'}</span>
           </article>
         </section>
       </section>
@@ -381,6 +382,7 @@ function App() {
           <span className="meta">
             Distance: {telemetry.distance ? `Front ${telemetry.distance.frontCm} cm, Back ${telemetry.distance.backCm} cm` : 'No distance data yet'}
           </span>
+          <span className="meta">Colour: {telemetry.colour ?? 'unknown'}</span>
         </article>
 
         <article className="panel log-panel">
