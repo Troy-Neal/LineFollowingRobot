@@ -2,7 +2,7 @@
 
 ## What Is It?
 
-This project is an ESP32-based mobile robot that can be driven from a website over Wi-Fi and can also run a simple autonomous line-follow mode.
+This project is an ESP32-based mobile robot that can be driven from a website over Wi-Fi and can also run a simple autonomous line-follow mode. It was originally intended to be a factory style component delivery bot that could follow lines on the ground to navigate between points of interest. However the IR sensors that I got arrived malfunctioning, and did not correctly identify white vs black despite the manufacturers description. Due to this, the project had to be simplified last minute resulting in the drivable car, with very very basic line following abilities.
 
 The robot uses:
 
@@ -48,7 +48,7 @@ The process is:
 
 - ESP32 development board
 - L298N motor driver
-- 2 DC motors with wheels
+- 4 DC motors with wheels
 - robot chassis
 - TCS34725 colour sensor
 - ultrasonic distance sensor
@@ -212,17 +212,7 @@ How this was handled:
 - polarity was changed to match observed readings
 - line-following was simplified to rely mainly on the colour sensor instead
 
-### 2. Sensor Orientation and Naming Mismatches
-
-Front/back sensor naming in software did not initially match the real robot layout.
-
-How this was handled:
-
-- front/back mappings were corrected
-- sensor orders were swapped where needed
-- test sketches were used to verify GPIO-to-sensor mapping
-
-### 3. WebSocket Logging and State Feedback Problems
+### 2. WebSocket Logging and State Feedback Problems
 
 At one point the robot was receiving UI snapshots and logging them back, which polluted the log stream and made debugging confusing.
 
@@ -232,7 +222,7 @@ How this was handled:
 - robot-side logging was limited to useful messages
 - the frontend was updated to show live robot logs more clearly
 
-### 4. Manual Commands Interfered With Follow Mode
+### 3. Manual Commands Interfered With Follow Mode
 
 Queued drive commands from the browser could interfere with line-follow mode and cancel it unexpectedly.
 
@@ -242,7 +232,7 @@ How this was handled:
 - queued drive commands were cleared before entering follow mode
 - command flow between manual and follow modes was cleaned up
 
-### 5. Obstacle Safety Was Initially Too Weak
+### 4. Obstacle Safety Was Initially Too Weak
 
 The original obstacle stop logic only checked distance when a new command arrived.
 
@@ -252,24 +242,7 @@ How this was handled:
 - distance readings were cached
 - safety enforcement was moved into the main loop
 
-### 6. Motors Would Whine Without Moving
 
-Some line-follow motor outputs caused whining without actual movement.
-
-How this was handled:
-
-- PWM frequency was increased
-- follow and sweep speeds were increased
-- low-speed movement values were retuned
-
-### 7. Debug Telemetry Introduced JSON Errors
-
-While adding more debug telemetry, malformed JSON was briefly generated.
-
-How this was handled:
-
-- the telemetry payload construction was corrected
-- requested versus applied motor values were then used for debugging
 
 ## Final Notes
 
@@ -282,4 +255,4 @@ This project became as much a debugging and integration exercise as a robot buil
 - safety logic
 - or motor drive behavior
 
-The final system combines manual control, telemetry, logging, and a simple autonomous follow mode, with most of the engineering effort going into making those pieces work together reliably.
+If I wasn't so busy with everything else this would have gone a lot better.
