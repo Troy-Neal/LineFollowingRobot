@@ -50,8 +50,8 @@ function normalizeVector(clientX, clientY, rect) {
 function createDriveCommand(x, y) {
   const normalizedX = roundDrive(clamp(x, -1, 1))
   const normalizedY = roundDrive(clamp(y, -1, 1))
-  const left = roundDrive(clamp(normalizedY + normalizedX, -1, 1))
-  const right = roundDrive(clamp(normalizedY - normalizedX, -1, 1))
+  const left = roundDrive(clamp(normalizedY - normalizedX, -1, 1))
+  const right = roundDrive(clamp(normalizedY + normalizedX, -1, 1))
 
   let mode = 'stop'
   if (Math.abs(normalizedX) < 0.08 && Math.abs(normalizedY) < 0.08) {
