@@ -383,6 +383,9 @@ function App() {
             Distance: {telemetry.distance ? `Front ${telemetry.distance.frontCm} cm, Back ${telemetry.distance.backCm} cm` : 'No distance data yet'}
           </span>
           <span className="meta">Colour: {telemetry.colour ?? 'unknown'}</span>
+          <span className="meta">Requested motors: {telemetry.motors?.requestedLeft ?? 0} / {telemetry.motors?.requestedRight ?? 0}</span>
+          <span className="meta">Applied motors: {telemetry.motors?.left ?? 0} / {telemetry.motors?.right ?? 0}</span>
+          <span className="meta">Line follow: {telemetry.lineFollow ? `${telemetry.lineFollow.detected ? 'detected' : 'not detected'} (${telemetry.lineFollow.detectedColour ?? 'unknown'})` : 'No line-follow data yet'}</span>
         </article>
 
         <article className="panel log-panel">

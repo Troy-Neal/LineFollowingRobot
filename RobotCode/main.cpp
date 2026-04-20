@@ -19,6 +19,9 @@ constexpr float FORWARD_BLOCK_DISTANCE_CM = 15.0F;
 constexpr float FORWARD_CAUTION_DISTANCE_CM = 25.0F;
 constexpr int MIN_INCREMENTAL_FORWARD_SPEED = 40;
 constexpr int MAX_INCREMENTAL_FORWARD_SPEED = 90;
+constexpr unsigned long LINE_REACQUIRE_LEFT_SWEEP_MS = 550;
+constexpr unsigned long LINE_REACQUIRE_RIGHT_SWEEP_MS = 900;
+constexpr unsigned long LINE_REACQUIRE_FORWARD_MS = 220;
 
 // Front line following sensors.
 constexpr int FF_LINE_PIN = 33;
@@ -95,10 +98,21 @@ struct MotorCommand {
   int rightSpeed;
 };
 
+struct LineFollowDebug {
+  bool lineDetected;
+  COLOUR detectedColour;
+};
+
 enum DriveMode {
   DRIVE_MANUAL,
   DRIVE_LINE_FOLLOW_WAITING,
   DRIVE_LINE_FOLLOW_ACTIVE,
+};
+
+enum ReacquirePhase {
+  REACQUIRE_SWEEP_LEFT,
+  REACQUIRE_SWEEP_RIGHT,
+  REACQUIRE_CREEP_FORWARD,
 };
 
 String desiredState = "off";
@@ -113,11 +127,15 @@ MotorCommand currentMotorCommand = {0, 0};
 DriveMode currentDriveMode = DRIVE_MANUAL;
 unsigned long lastLineFollowAt = 0;
 int lastLineFollowTurn = 0;
+unsigned long lineReacquireStartedAt = 0;
+ReacquirePhase lineReacquirePhase = REACQUIRE_SWEEP_LEFT;
 unsigned long lastDistanceReadAt = 0;
 float latestFrontDistanceCm = -1.0F;
 float latestBackDistanceCm = -1.0F;
+LineFollowDebug latestLineFollowDebug = {false, WHITE};
 
 float readFrontDistanceCm();
+COLOUR readDetectedColour();
 
 String escapeJsonString(const String& value) {
   String escaped;
@@ -351,13 +369,16 @@ const char* driveModeToString(DriveMode mode) {
   }
 }
 
-bool sensorSeesLine(int reading) {
-  return reading == HIGH;
+bool colourMeansLine(COLOUR colour) {
+  return colour == BLACK || colour == BLUE || colour == GREEN ||
+         colour == YELLOW;
 }
 
 void startLineFollowMode() {
   currentDriveMode = DRIVE_LINE_FOLLOW_WAITING;
   lastLineFollowTurn = 0;
+  lineReacquireStartedAt = 0;
+  lineReacquirePhase = REACQUIRE_SWEEP_LEFT;
   stopMotors();
   sendRobotLog("info", "Line follow requested. Put the robot onto the line.");
 }
@@ -368,11 +389,14 @@ void stopLineFollowMode() {
   }
   currentDriveMode = DRIVE_MANUAL;
   lastLineFollowTurn = 0;
+  lineReacquireStartedAt = 0;
+  lineReacquirePhase = REACQUIRE_SWEEP_LEFT;
   stopMotors();
 }
 
 void updateLineFollow() {
   if (currentDriveMode == DRIVE_MANUAL) {
+    latestLineFollowDebug = {false, readDetectedColour()};
     return;
   }
 
@@ -381,57 +405,60 @@ void updateLineFollow() {
   }
 
   lastLineFollowAt = millis();
+  const COLOUR detectedColour = readDetectedColour();
+  const bool onLine = colourMeansLine(detectedColour);
+  latestLineFollowDebug = {onLine, detectedColour};
+  constexpr int FORWARD_SPEED = 120;
+  constexpr int SWEEP_SPEED = 115;
+  constexpr int CREEP_FORWARD_SPEED = 70;
 
-  const LineSensorReadings readings = readLineSensors();
-  const bool firstOnLine = sensorSeesLine(readings.frontFar);
-  const bool secondOnLine = sensorSeesLine(readings.frontSide);
-  const bool thirdOnLine = sensorSeesLine(readings.frontThird);
-  const bool anyOnLine = firstOnLine || secondOnLine || thirdOnLine;
-  constexpr int FORWARD_SPEED = 150;
-  constexpr int TURN_SPEED = 140;
-  constexpr int SEARCH_SPEED = 110;
-
-  if (!anyOnLine) {
+  if (onLine) {
     if (currentDriveMode == DRIVE_LINE_FOLLOW_WAITING) {
-      stopMotors();
-      return;
+      currentDriveMode = DRIVE_LINE_FOLLOW_ACTIVE;
+      sendRobotLog("info", "Line acquired. Following started.");
     }
 
-    if (lastLineFollowTurn < 0) {
-      applyMotorCommand(SEARCH_SPEED / 2, SEARCH_SPEED);
-    } else if (lastLineFollowTurn > 0) {
-      applyMotorCommand(SEARCH_SPEED, SEARCH_SPEED / 2);
-    } else {
-      stopMotors();
-    }
-    return;
-  }
-
-  if (currentDriveMode == DRIVE_LINE_FOLLOW_WAITING) {
-    currentDriveMode = DRIVE_LINE_FOLLOW_ACTIVE;
-    sendRobotLog("info", "Line acquired. Following started.");
-  }
-
-  if (secondOnLine && !firstOnLine && !thirdOnLine) {
+    lineReacquireStartedAt = 0;
+    lineReacquirePhase = REACQUIRE_SWEEP_LEFT;
     lastLineFollowTurn = 0;
     applyMotorCommand(FORWARD_SPEED, FORWARD_SPEED);
     return;
   }
 
-  if (firstOnLine && !thirdOnLine) {
-    lastLineFollowTurn = -1;
-    applyMotorCommand(TURN_SPEED, TURN_SPEED / 3);
+  if (currentDriveMode == DRIVE_LINE_FOLLOW_WAITING) {
+    stopMotors();
     return;
   }
 
-  if (thirdOnLine && !firstOnLine) {
-    lastLineFollowTurn = 1;
-    applyMotorCommand(TURN_SPEED / 3, TURN_SPEED);
-    return;
+  if (lineReacquireStartedAt == 0) {
+    lineReacquireStartedAt = millis();
+    lineReacquirePhase = REACQUIRE_SWEEP_LEFT;
   }
 
-  lastLineFollowTurn = 0;
-  applyMotorCommand(FORWARD_SPEED, FORWARD_SPEED);
+  switch (lineReacquirePhase) {
+    case REACQUIRE_SWEEP_LEFT:
+      applyMotorCommand(-SWEEP_SPEED, SWEEP_SPEED);
+      if (millis() - lineReacquireStartedAt >= LINE_REACQUIRE_LEFT_SWEEP_MS) {
+        lineReacquirePhase = REACQUIRE_SWEEP_RIGHT;
+        lineReacquireStartedAt = millis();
+      }
+      return;
+    case REACQUIRE_SWEEP_RIGHT:
+      applyMotorCommand(SWEEP_SPEED, -SWEEP_SPEED);
+      if (millis() - lineReacquireStartedAt >= LINE_REACQUIRE_RIGHT_SWEEP_MS) {
+        lineReacquirePhase = REACQUIRE_CREEP_FORWARD;
+        lineReacquireStartedAt = millis();
+      }
+      return;
+    case REACQUIRE_CREEP_FORWARD:
+    default:
+      applyMotorCommand(CREEP_FORWARD_SPEED, CREEP_FORWARD_SPEED);
+      if (millis() - lineReacquireStartedAt >= LINE_REACQUIRE_FORWARD_MS) {
+        lineReacquirePhase = REACQUIRE_SWEEP_LEFT;
+        lineReacquireStartedAt = millis();
+      }
+      return;
+  }
 }
 
 void initializeUltrasonicSensor(int trigPin, int echoPin) {
@@ -715,6 +742,10 @@ void sendHeartbeat() {
   payload += currentMotorCommand.leftSpeed;
   payload += ",\"right\":";
   payload += currentMotorCommand.rightSpeed;
+  payload += ",\"requestedLeft\":";
+  payload += requestedMotorCommand.leftSpeed;
+  payload += ",\"requestedRight\":";
+  payload += requestedMotorCommand.rightSpeed;
   payload += ",\"mode\":\"";
   payload += driveModeToString(currentDriveMode);
   payload += "\"";
@@ -736,6 +767,10 @@ void sendHeartbeat() {
   payload += String(latestBackDistanceCm, 2);
   payload += "},\"colour\":\"";
   payload += colourToString(detectedColour);
+  payload += "\",\"lineFollow\":{\"detected\":";
+  payload += latestLineFollowDebug.lineDetected ? "true" : "false";
+  payload += ",\"detectedColour\":\"";
+  payload += colourToString(latestLineFollowDebug.detectedColour);
   payload += "\"}";
   webSocket.sendTXT(payload);
 }
