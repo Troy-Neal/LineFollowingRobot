@@ -86,7 +86,6 @@ function createSnapshot() {
 function broadcastSnapshot() {
   const snapshot = createSnapshot()
   broadcastTo(uiClients, snapshot)
-  broadcastTo(deviceClients, snapshot)
 }
 
 function broadcastRobotLog(entry) {
@@ -110,7 +109,10 @@ function registerClient(socket, role) {
     state.lastSeenAt = new Date().toISOString()
   }
 
-  socket.send(createSnapshot())
+  if (role === 'ui') {
+    socket.send(createSnapshot())
+  }
+
   broadcastSnapshot()
 }
 

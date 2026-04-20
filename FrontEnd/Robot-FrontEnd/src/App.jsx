@@ -3,6 +3,7 @@ import './App.css'
 
 const PAD_RADIUS = 110
 const MAX_LOGS = 80
+const DRIVE_SEND_INTERVAL_MS = 40
 
 const STOP_COMMAND = {
   x: 0,
@@ -99,6 +100,9 @@ function App() {
   const socketRef = useRef(null)
   const padRef = useRef(null)
   const pointerIdRef = useRef(null)
+  const lastDriveSentAtRef = useRef(0)
+  const pendingDriveCommandRef = useRef(null)
+  const driveTimerRef = useRef(0)
 
   function applySnapshot(payload) {
     setLastSeenAt(payload.lastSeenAt ?? null)
@@ -168,24 +172,58 @@ function App() {
     return () => {
       stopped = true
       window.clearTimeout(reconnectTimerId)
+      if (driveTimerRef.current) {
+        window.clearTimeout(driveTimerRef.current)
+      }
       socketRef.current?.close()
     }
   }, [])
 
-  function sendDriveCommand(command) {
-    setDriveCommand(command)
-
+  function flushDriveCommand(command) {
     if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
       setError('WebSocket is not connected')
       return
     }
 
+    lastDriveSentAtRef.current = Date.now()
     socketRef.current.send(
       JSON.stringify({
         type: 'drive',
         ...command,
       }),
     )
+  }
+
+  function sendDriveCommand(command) {
+    setDriveCommand(command)
+
+    const now = Date.now()
+    const elapsed = now - lastDriveSentAtRef.current
+    const shouldSendImmediately =
+      command.mode === 'stop' || elapsed >= DRIVE_SEND_INTERVAL_MS
+
+    if (shouldSendImmediately) {
+      pendingDriveCommandRef.current = null
+      if (driveTimerRef.current) {
+        window.clearTimeout(driveTimerRef.current)
+        driveTimerRef.current = 0
+      }
+      flushDriveCommand(command)
+      return
+    }
+
+    pendingDriveCommandRef.current = command
+    if (driveTimerRef.current) {
+      return
+    }
+
+    driveTimerRef.current = window.setTimeout(() => {
+      driveTimerRef.current = 0
+      if (pendingDriveCommandRef.current) {
+        flushDriveCommand(pendingDriveCommandRef.current)
+        pendingDriveCommandRef.current = null
+      }
+    }, DRIVE_SEND_INTERVAL_MS - elapsed)
   }
 
   function updateFromPointer(event) {

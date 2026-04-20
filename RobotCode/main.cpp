@@ -36,6 +36,8 @@ constexpr int RIGHT_MOTOR_PWM_CHANNEL = 1;
 constexpr int MOTOR_PWM_FREQUENCY = 1000;
 constexpr int MOTOR_PWM_RESOLUTION_BITS = 8;
 constexpr int DEFAULT_MOTOR_SPEED = 180;
+constexpr bool LEFT_MOTOR_INVERTED = false;
+constexpr bool RIGHT_MOTOR_INVERTED = true;
 
 // RGB sensor I2C pins.
 constexpr int RGB_SDA_PIN = 21;
@@ -253,7 +255,8 @@ void initializeMotors() {
   ledcAttachPin(RIGHT_MOTOR_EN_PIN, RIGHT_MOTOR_PWM_CHANNEL);
 }
 
-void applySingleMotor(int in1Pin, int in2Pin, int pwmChannel, int speed) {
+void applySingleMotor(int in1Pin, int in2Pin, int pwmChannel, int speed,
+                      bool inverted) {
   const int clippedSpeed = constrain(speed, -255, 255);
   if (clippedSpeed == 0) {
     digitalWrite(in1Pin, LOW);
@@ -262,8 +265,9 @@ void applySingleMotor(int in1Pin, int in2Pin, int pwmChannel, int speed) {
     return;
   }
 
-  digitalWrite(in1Pin, clippedSpeed > 0 ? HIGH : LOW);
-  digitalWrite(in2Pin, clippedSpeed > 0 ? LOW : HIGH);
+  const bool forward = inverted ? clippedSpeed < 0 : clippedSpeed > 0;
+  digitalWrite(in1Pin, forward ? HIGH : LOW);
+  digitalWrite(in2Pin, forward ? LOW : HIGH);
   ledcWrite(pwmChannel, abs(clippedSpeed));
 }
 
@@ -272,9 +276,11 @@ void applyMotorCommand(int leftSpeed, int rightSpeed) {
   currentMotorCommand.rightSpeed = constrain(rightSpeed, -255, 255);
 
   applySingleMotor(LEFT_MOTOR_IN1_PIN, LEFT_MOTOR_IN2_PIN,
-                   LEFT_MOTOR_PWM_CHANNEL, currentMotorCommand.leftSpeed);
+                   LEFT_MOTOR_PWM_CHANNEL, currentMotorCommand.leftSpeed,
+                   LEFT_MOTOR_INVERTED);
   applySingleMotor(RIGHT_MOTOR_IN1_PIN, RIGHT_MOTOR_IN2_PIN,
-                   RIGHT_MOTOR_PWM_CHANNEL, currentMotorCommand.rightSpeed);
+                   RIGHT_MOTOR_PWM_CHANNEL, currentMotorCommand.rightSpeed,
+                   RIGHT_MOTOR_INVERTED);
 }
 
 void stopMotors() {
@@ -592,7 +598,12 @@ void applyNamedMotorCommand(const String& command, int speed) {
 }
 
 void handleMessage(const String& payload) {
-  sendRobotLog("info", "WS message: " + payload);
+  String messageType;
+  extractStringValue(payload, "type", messageType);
+
+  if (messageType == "error") {
+    sendRobotLog("error", "Server error: " + payload);
+  }
 
   String nextState;
   String motionCommand;
@@ -617,9 +628,6 @@ void handleMessage(const String& payload) {
 
   if (hasDirectMotorSpeeds) {
     applyMotorCommand(leftSpeed, rightSpeed);
-    sendRobotLog(
-        "info", "Motors updated left=" + String(currentMotorCommand.leftSpeed) +
-                    " right=" + String(currentMotorCommand.rightSpeed));
     return;
   }
 
@@ -629,8 +637,6 @@ void handleMessage(const String& payload) {
       extractStringValue(payload, "movement", motionCommand)) {
     motionCommand.toLowerCase();
     applyNamedMotorCommand(motionCommand, speed);
-    sendRobotLog("info", "Motor command applied: " + motionCommand +
-                             " speed=" + String(speed));
   }
 }
 
