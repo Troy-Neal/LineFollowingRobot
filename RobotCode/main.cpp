@@ -13,6 +13,7 @@ constexpr int LED_PIN = 2;
 constexpr unsigned long HEARTBEAT_INTERVAL_MS = 1000;
 constexpr unsigned long RECONNECT_INTERVAL_MS = 2000;
 constexpr unsigned long ULTRASONIC_TIMEOUT_US = 30000;
+constexpr unsigned long LINE_FOLLOW_INTERVAL_MS = 20;
 
 // Front line following sensors.
 constexpr int FF_LINE_PIN = 35;
@@ -57,13 +58,9 @@ constexpr uint8_t TCS34725_ENABLE_AEN = 0x02;
 constexpr uint8_t TCS34725_INTEGRATION_154MS = 0xC0;
 constexpr uint8_t TCS34725_GAIN_16X = 0x02;
 
-// Front ultrasonic sensor.
-constexpr int F_DIST_TRIG_PIN = 4;
-constexpr int F_DIST_ECHO_PIN = 5;
-
-// Back ultrasonic sensor.
-constexpr int B_DIST_TRIG_PIN = 13;
-constexpr int B_DIST_ECHO_PIN = 15;
+// Only one ultrasonic sensor is currently connected, and it faces forward.
+constexpr int FRONT_DIST_TRIG_PIN = 13;
+constexpr int FRONT_DIST_ECHO_PIN = 15;
 
 enum COLOUR { BLACK, WHITE, BLUE, RED, GREEN, YELLOW };
 
@@ -93,6 +90,12 @@ struct MotorCommand {
   int rightSpeed;
 };
 
+enum DriveMode {
+  DRIVE_MANUAL,
+  DRIVE_LINE_FOLLOW_WAITING,
+  DRIVE_LINE_FOLLOW_ACTIVE,
+};
+
 String desiredState = "off";
 bool ledIsOn = false;
 unsigned long lastHeartbeatAt = 0;
@@ -101,6 +104,9 @@ bool websocketReady = false;
 COLOUR desiredColour = BLUE;
 bool rgbSensorReady = false;
 MotorCommand currentMotorCommand = {0, 0};
+DriveMode currentDriveMode = DRIVE_MANUAL;
+unsigned long lastLineFollowAt = 0;
+int lastLineFollowTurn = 0;
 
 String escapeJsonString(const String& value) {
   String escaped;
@@ -287,6 +293,101 @@ void stopMotors() {
   applyMotorCommand(0, 0);
 }
 
+const char* driveModeToString(DriveMode mode) {
+  switch (mode) {
+    case DRIVE_LINE_FOLLOW_WAITING:
+      return "line_follow_waiting";
+    case DRIVE_LINE_FOLLOW_ACTIVE:
+      return "line_follow_active";
+    case DRIVE_MANUAL:
+    default:
+      return "manual";
+  }
+}
+
+bool sensorSeesLine(int reading) {
+  return reading == LOW;
+}
+
+void startLineFollowMode() {
+  currentDriveMode = DRIVE_LINE_FOLLOW_WAITING;
+  lastLineFollowTurn = 0;
+  stopMotors();
+  sendRobotLog("info", "Line follow requested. Put the robot onto the line.");
+}
+
+void stopLineFollowMode() {
+  if (currentDriveMode != DRIVE_MANUAL) {
+    sendRobotLog("info", "Line follow stopped.");
+  }
+  currentDriveMode = DRIVE_MANUAL;
+  lastLineFollowTurn = 0;
+  stopMotors();
+}
+
+void updateLineFollow() {
+  if (currentDriveMode == DRIVE_MANUAL) {
+    return;
+  }
+
+  if (millis() - lastLineFollowAt < LINE_FOLLOW_INTERVAL_MS) {
+    return;
+  }
+
+  lastLineFollowAt = millis();
+
+  const LineSensorReadings readings = readLineSensors();
+  const bool leftOnLine = sensorSeesLine(readings.frontFar);
+  const bool centreOnLine = sensorSeesLine(readings.frontSide);
+  const bool rightOnLine = sensorSeesLine(readings.frontThird);
+  const bool anyOnLine = leftOnLine || centreOnLine || rightOnLine;
+  constexpr int FORWARD_SPEED = 150;
+  constexpr int TURN_SPEED = 140;
+  constexpr int SEARCH_SPEED = 110;
+
+  if (!anyOnLine) {
+    if (currentDriveMode == DRIVE_LINE_FOLLOW_WAITING) {
+      stopMotors();
+      return;
+    }
+
+    if (lastLineFollowTurn < 0) {
+      applyMotorCommand(SEARCH_SPEED / 2, SEARCH_SPEED);
+    } else if (lastLineFollowTurn > 0) {
+      applyMotorCommand(SEARCH_SPEED, SEARCH_SPEED / 2);
+    } else {
+      stopMotors();
+    }
+    return;
+  }
+
+  if (currentDriveMode == DRIVE_LINE_FOLLOW_WAITING) {
+    currentDriveMode = DRIVE_LINE_FOLLOW_ACTIVE;
+    sendRobotLog("info", "Line acquired. Following started.");
+  }
+
+  if (centreOnLine && !leftOnLine && !rightOnLine) {
+    lastLineFollowTurn = 0;
+    applyMotorCommand(FORWARD_SPEED, FORWARD_SPEED);
+    return;
+  }
+
+  if (leftOnLine && !rightOnLine) {
+    lastLineFollowTurn = -1;
+    applyMotorCommand(TURN_SPEED / 3, TURN_SPEED);
+    return;
+  }
+
+  if (rightOnLine && !leftOnLine) {
+    lastLineFollowTurn = 1;
+    applyMotorCommand(TURN_SPEED, TURN_SPEED / 3);
+    return;
+  }
+
+  lastLineFollowTurn = 0;
+  applyMotorCommand(FORWARD_SPEED, FORWARD_SPEED);
+}
+
 void initializeUltrasonicSensor(int trigPin, int echoPin) {
   pinMode(trigPin, OUTPUT);
   pinMode(echoPin, INPUT);
@@ -311,11 +412,11 @@ float readUltrasonicDistanceCm(int trigPin, int echoPin) {
 }
 
 float readFrontDistanceCm() {
-  return readUltrasonicDistanceCm(F_DIST_TRIG_PIN, F_DIST_ECHO_PIN);
+  return readUltrasonicDistanceCm(FRONT_DIST_TRIG_PIN, FRONT_DIST_ECHO_PIN);
 }
 
 float readBackDistanceCm() {
-  return readUltrasonicDistanceCm(B_DIST_TRIG_PIN, B_DIST_ECHO_PIN);
+  return -1.0F;
 }
 
 UltrasonicReadings readUltrasonicSensors() {
@@ -513,8 +614,7 @@ const char* colourToString(COLOUR colour) {
 void initializeSensors() {
   initializeLineSensors();
   initializeMotors();
-  initializeUltrasonicSensor(F_DIST_TRIG_PIN, F_DIST_ECHO_PIN);
-  initializeUltrasonicSensor(B_DIST_TRIG_PIN, B_DIST_ECHO_PIN);
+  initializeUltrasonicSensor(FRONT_DIST_TRIG_PIN, FRONT_DIST_ECHO_PIN);
   initializeRgbSensorBus();
   rgbSensorReady = initializeRgbSensor();
 }
@@ -559,6 +659,9 @@ void sendHeartbeat() {
   payload += currentMotorCommand.leftSpeed;
   payload += ",\"right\":";
   payload += currentMotorCommand.rightSpeed;
+  payload += ",\"mode\":\"";
+  payload += driveModeToString(currentDriveMode);
+  payload += "\"";
   payload += "},\"line\":{\"ff\":";
   payload += lineReadings.frontFar;
   payload += ",\"fs\":";
@@ -585,15 +688,21 @@ void applyNamedMotorCommand(const String& command, int speed) {
   const int clippedSpeed = constrain(speed, 0, 255);
 
   if (command == "forward") {
+    currentDriveMode = DRIVE_MANUAL;
     applyMotorCommand(clippedSpeed, clippedSpeed);
   } else if (command == "backward" || command == "reverse") {
+    currentDriveMode = DRIVE_MANUAL;
     applyMotorCommand(-clippedSpeed, -clippedSpeed);
   } else if (command == "left") {
+    currentDriveMode = DRIVE_MANUAL;
     applyMotorCommand(-clippedSpeed, clippedSpeed);
   } else if (command == "right") {
+    currentDriveMode = DRIVE_MANUAL;
     applyMotorCommand(clippedSpeed, -clippedSpeed);
+  } else if (command == "line_follow" || command == "line-follow") {
+    startLineFollowMode();
   } else if (command == "stop") {
-    stopMotors();
+    stopLineFollowMode();
   }
 }
 
@@ -627,7 +736,18 @@ void handleMessage(const String& payload) {
       extractIntValue(payload, "rightSpeed", rightSpeed);
 
   if (hasDirectMotorSpeeds) {
+    currentDriveMode = DRIVE_MANUAL;
     applyMotorCommand(leftSpeed, rightSpeed);
+    return;
+  }
+
+  int lineFollowEnabled = 0;
+  if (extractIntValue(payload, "lineFollowEnabled", lineFollowEnabled)) {
+    if (lineFollowEnabled != 0) {
+      startLineFollowMode();
+    } else {
+      stopLineFollowMode();
+    }
     return;
   }
 
@@ -687,7 +807,7 @@ void setup() {
   delay(200);
 
   initializeSensors();
-  stopMotors();
+  stopLineFollowMode();
 
   if (rgbSensorReady) {
     Serial.println("TCS34725 ready");
@@ -705,6 +825,7 @@ void loop() {
   }
 
   webSocket.loop();
+  updateLineFollow();
 
   if (websocketReady && millis() - lastHeartbeatAt >= HEARTBEAT_INTERVAL_MS) {
     lastHeartbeatAt = millis();

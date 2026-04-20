@@ -138,10 +138,30 @@ function relayDriveCommand(command) {
 
   sendDevicePayload({
     type: 'control',
+    lineFollowEnabled: 0,
     motorCommand: String(command.mode ?? 'stop'),
     speed,
     leftSpeed,
     rightSpeed,
+  })
+
+  broadcastSnapshot()
+}
+
+function relayLineFollowCommand(enabled) {
+  state.driveCommand = {
+    x: 0,
+    y: 0,
+    left: 0,
+    right: 0,
+    mode: enabled ? 'line_follow' : 'stop',
+  }
+  state.lastCommandAt = new Date().toISOString()
+
+  sendDevicePayload({
+    type: 'control',
+    lineFollowEnabled: enabled ? 1 : 0,
+    motorCommand: enabled ? 'line_follow' : 'stop',
   })
 
   broadcastSnapshot()
@@ -270,6 +290,17 @@ websocketServer.on('connection', (socket) => {
 
         relayLedCommand(payload.state)
         socket.send(JSON.stringify({ type: 'ack', state: payload.state }))
+        return
+      }
+
+      if (payload.type === 'line-follow') {
+        if (socket.role !== 'ui') {
+          socket.send(JSON.stringify({ type: 'error', message: 'ui only action' }))
+          return
+        }
+
+        relayLineFollowCommand(Boolean(payload.enabled))
+        socket.send(JSON.stringify({ type: 'ack', enabled: Boolean(payload.enabled) }))
         return
       }
 

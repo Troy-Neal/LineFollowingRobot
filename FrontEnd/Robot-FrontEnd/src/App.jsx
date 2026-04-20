@@ -194,6 +194,16 @@ function App() {
     )
   }
 
+  function sendLineFollowCommand(enabled) {
+    if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
+      setError('WebSocket is not connected')
+      return
+    }
+
+    setDriveCommand({ ...STOP_COMMAND, mode: enabled ? 'line_follow' : 'stop' })
+    socketRef.current.send(JSON.stringify({ type: 'line-follow', enabled }))
+  }
+
   function sendDriveCommand(command) {
     setDriveCommand(command)
 
@@ -264,6 +274,8 @@ function App() {
     sendDriveCommand(STOP_COMMAND)
   }
 
+  const robotMode = telemetry.motors?.mode ?? 'manual'
+
   const knobStyle = {
     transform: `translate(calc(-50% + ${driveCommand.x * PAD_RADIUS}px), calc(-50% + ${-driveCommand.y * PAD_RADIUS}px))`,
   }
@@ -298,6 +310,12 @@ function App() {
           </div>
 
           <div className="quick-controls">
+            <button type="button" className="follow" onClick={() => sendLineFollowCommand(true)}>
+              Follow Line
+            </button>
+            <button type="button" onClick={() => sendLineFollowCommand(false)}>
+              Stop Follow
+            </button>
             <button type="button" onPointerDown={() => sendDriveCommand(createDriveCommand(0, 1))} onPointerUp={() => sendDriveCommand(STOP_COMMAND)} onPointerLeave={() => sendDriveCommand(STOP_COMMAND)}>
               Forward
             </button>
@@ -344,8 +362,8 @@ function App() {
           </article>
 
           <article className="panel status-card">
-            <span className="label">Robot Check-In</span>
-            <strong className="value telemetry-colour">{telemetry.colour ?? 'unknown'}</strong>
+            <span className="label">Robot Mode</span>
+            <strong className="value telemetry-colour">{robotMode}</strong>
             <span className="meta">Last seen: {formatTimestamp(lastSeenAt)}</span>
           </article>
         </section>
