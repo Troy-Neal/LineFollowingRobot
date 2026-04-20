@@ -376,6 +376,7 @@ bool colourMeansLine(COLOUR colour) {
 
 void startLineFollowMode() {
   currentDriveMode = DRIVE_LINE_FOLLOW_WAITING;
+  desiredColour = WHITE;
   lastLineFollowTurn = 0;
   lineReacquireStartedAt = 0;
   lineReacquirePhase = REACQUIRE_SWEEP_LEFT;
@@ -406,18 +407,22 @@ void updateLineFollow() {
 
   lastLineFollowAt = millis();
   const COLOUR detectedColour = readDetectedColour();
-  const bool onLine = colourMeansLine(detectedColour);
+  const bool validLineColour = colourMeansLine(detectedColour);
+  if (currentDriveMode == DRIVE_LINE_FOLLOW_WAITING && validLineColour) {
+    desiredColour = detectedColour;
+    currentDriveMode = DRIVE_LINE_FOLLOW_ACTIVE;
+    sendRobotLog("info", "Line acquired. Following started.");
+  }
+
+  const bool onLine =
+      currentDriveMode == DRIVE_LINE_FOLLOW_ACTIVE &&
+      detectedColour == desiredColour;
   latestLineFollowDebug = {onLine, detectedColour};
   constexpr int FORWARD_SPEED = 120;
   constexpr int SWEEP_SPEED = 115;
   constexpr int CREEP_FORWARD_SPEED = 70;
 
   if (onLine) {
-    if (currentDriveMode == DRIVE_LINE_FOLLOW_WAITING) {
-      currentDriveMode = DRIVE_LINE_FOLLOW_ACTIVE;
-      sendRobotLog("info", "Line acquired. Following started.");
-    }
-
     lineReacquireStartedAt = 0;
     lineReacquirePhase = REACQUIRE_SWEEP_LEFT;
     lastLineFollowTurn = 0;
@@ -649,6 +654,19 @@ COLOUR classifyColour(uint16_t red, uint16_t green, uint16_t blue,
     return BLUE;
   }
 
+  // Dark green can have a low clear value but still be clearly green-dominant.
+  if (green > 18 && greenRatio > 0.36F && green > red * 1.05F &&
+      green > blue * 1.10F && chroma > 8) {
+    return GREEN;
+  }
+
+  // Dark yellow often looks close to black if we only use the clear channel.
+  if (red > 16 && green > 16 && blueRatio < 0.20F && redRatio > 0.28F &&
+      greenRatio > 0.28F && fabsf(redRatio - greenRatio) < 0.22F &&
+      chroma > 6) {
+    return YELLOW;
+  }
+
   if (clear < 7000 || total < 7000.0F ||
       (clear < 12000 && total < 12000.0F && chromaRatio < 0.55F)) {
     return BLACK;
@@ -771,7 +789,7 @@ void sendHeartbeat() {
   payload += latestLineFollowDebug.lineDetected ? "true" : "false";
   payload += ",\"detectedColour\":\"";
   payload += colourToString(latestLineFollowDebug.detectedColour);
-  payload += "\"}";
+  payload += "\"}}";
   webSocket.sendTXT(payload);
 }
 

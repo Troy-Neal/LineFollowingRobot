@@ -195,6 +195,12 @@ function App() {
   }
 
   function sendLineFollowCommand(enabled) {
+    pendingDriveCommandRef.current = null
+    if (driveTimerRef.current) {
+      window.clearTimeout(driveTimerRef.current)
+      driveTimerRef.current = 0
+    }
+
     if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
       setError('WebSocket is not connected')
       return
